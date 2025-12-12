@@ -216,7 +216,18 @@ class OCRProcessor:
         return img
     
     def _process_word(self, file_path: Path) -> Tuple[str, float, bool]:
-        """Process Word document."""
+        """Process Word document (.docx and .doc)."""
+        extension = file_path.suffix.lower()
+        
+        if extension == '.docx':
+            return self._process_docx(file_path)
+        elif extension == '.doc':
+            return self._process_doc(file_path)
+        else:
+            raise ValueError(f"Unsupported Word format: {extension}")
+    
+    def _process_docx(self, file_path: Path) -> Tuple[str, float, bool]:
+        """Process .docx Word document."""
         from docx import Document
         
         doc = Document(file_path)
@@ -232,6 +243,86 @@ class OCRProcessor:
                     text.append(cell.text)
         
         return "\n".join(text), 1.0, False
+    
+    def _process_doc(self, file_path: Path) -> Tuple[str, float, bool]:
+        """Process old .doc Word document using antiword or textract."""
+        import subprocess
+        
+        # Try antiword first
+        try:
+            result = subprocess.run(
+                ['antiword', str(file_path)],
+                capture_output=True,
+                text=True,
+                timeout=30
+            )
+            if result.returncode == 0:
+                return result.stdout.strip(), 1.0, False
+        except (FileNotFoundError, subprocess.TimeoutExpired):
+            pass
+        
+        # Try catdoc as fallback
+        try:
+            result = subprocess.run(
+                ['catdoc', str(file_path)],
+                capture_output=True,
+                text=True,
+                timeout=30
+            )
+            if result.returncode == 0:
+                return result.stdout.strip(), 1.0, False
+        except (FileNotFoundError, subprocess.TimeoutExpired):
+            pass
+        
+        # Try libreoffice as last resort
+        try:
+            import tempfile
+            with tempfile.TemporaryDirectory() as tmpdir:
+                result = subprocess.run(
+                    ['libreoffice', '--headless', '--convert-to', 'txt:Text', '--outdir', tmpdir, str(file_path)],
+                    capture_output=True,
+                    text=True,
+                    timeout=60
+                )
+                if result.returncode == 0:
+                    txt_file = Path(tmpdir) / (file_path.stem + '.txt')
+                    if txt_file.exists():
+                        return txt_file.read_text(encoding='utf-8'), 1.0, False
+        except (FileNotFoundError, subprocess.TimeoutExpired):
+            pass
+        
+        # If all methods fail, try reading as binary and extracting text
+        try:
+            with open(file_path, 'rb') as f:
+                content = f.read()
+            
+            # Extract printable text from binary
+            import re
+            # Try to find UTF-8 or Latin-1 text sequences
+            text_parts = []
+            
+            # Try different decodings
+            for encoding in ['utf-8', 'cp1251', 'cp1252', 'latin-1']:
+                try:
+                    decoded = content.decode(encoding, errors='ignore')
+                    # Extract words (at least 3 consecutive printable chars)
+                    words = re.findall(r'[\w\s.,;:!?()-]{3,}', decoded)
+                    if words:
+                        text_parts.extend(words)
+                        break
+                except:
+                    continue
+            
+            if text_parts:
+                return ' '.join(text_parts)[:50000], 0.5, False  # Limit text and lower confidence
+                
+        except Exception as e:
+            logger.warning(f"Failed to extract text from .doc file: {e}")
+        
+        raise ValueError(
+            f"Cannot process .doc file. Please install antiword or catdoc, "
+            f"or convert the file to .docx format. File: {file_path}"
+        )
     
     def detect_language(self, text: str) -> str:
         """

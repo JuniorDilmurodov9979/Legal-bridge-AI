@@ -1,9 +1,11 @@
 """
 RAG (Retrieval-Augmented Generation) Module.
 Uses vector search to find relevant laws and generate context-aware responses.
+Supports both Ollama (local) and OpenAI (cloud) LLMs.
 """
 
 import logging
+import os
 from typing import Dict, List, Optional, Tuple
 from pathlib import Path
 
@@ -14,6 +16,7 @@ class LegalRAG:
     """
     RAG system for legal document retrieval and generation.
     Uses ChromaDB for vector storage and LLM for generation.
+    Supports Ollama (local) and OpenAI (cloud) as LLM backends.
     """
     
     def __init__(
@@ -21,7 +24,9 @@ class LegalRAG:
         vector_store_path: str = "./vector_store",
         embedding_model: str = "sentence-transformers/paraphrase-multilingual-MiniLM-L12-v2",
         llm_model: str = "llama3.1",
-        llm_base_url: str = "http://localhost:11434"
+        llm_base_url: str = "http://localhost:11434",
+        use_openai: bool = False,
+        openai_model: str = "gpt-3.5-turbo"
     ):
         """
         Initialize RAG system.
@@ -31,15 +36,22 @@ class LegalRAG:
             embedding_model: Sentence transformer model for embeddings
             llm_model: LLM model name (for Ollama)
             llm_base_url: Ollama server URL
+            use_openai: Force using OpenAI instead of Ollama
+            openai_model: OpenAI model to use
         """
         self.vector_store_path = Path(vector_store_path)
         self.embedding_model_name = embedding_model
         self.llm_model = llm_model
         self.llm_base_url = llm_base_url
+        self.use_openai = use_openai
+        self.openai_model = openai_model
         
         self.embeddings = None
         self.vectorstore = None
         self.llm = None
+        self.llm_client = None
+        self.openai_client = None
+        self.llm_type = None  # 'ollama', 'openai', or None
         
         self._initialized = False
     
@@ -70,20 +82,50 @@ class LegalRAG:
                 metadata={"hnsw:space": "cosine"}
             )
             
-            # Initialize LLM
-            try:
-                import ollama
-                self.llm_client = ollama.Client(host=self.llm_base_url)
-            except Exception as e:
-                logger.warning(f"Could not initialize Ollama: {e}")
-                self.llm_client = None
+            # Initialize LLM - try Ollama first, then OpenAI
+            self._initialize_llm()
             
             self._initialized = True
-            logger.info("RAG system initialized successfully")
+            logger.info(f"RAG system initialized successfully with LLM: {self.llm_type}")
             
         except Exception as e:
             logger.error(f"Failed to initialize RAG system: {e}")
             raise
+    
+    def _initialize_llm(self):
+        """Initialize LLM backend - Ollama or OpenAI."""
+        
+        # If force OpenAI, skip Ollama
+        if not self.use_openai:
+            # Try Ollama first
+            try:
+                import ollama
+                self.llm_client = ollama.Client(host=self.llm_base_url)
+                # Test connection
+                self.llm_client.list()
+                self.llm_type = 'ollama'
+                logger.info(f"Ollama initialized at {self.llm_base_url}")
+                return
+            except Exception as e:
+                logger.warning(f"Could not initialize Ollama: {e}")
+                self.llm_client = None
+        
+        # Try OpenAI as fallback
+        openai_api_key = os.environ.get('OPENAI_API_KEY')
+        if openai_api_key:
+            try:
+                from openai import OpenAI
+                self.openai_client = OpenAI(api_key=openai_api_key)
+                self.llm_type = 'openai'
+                logger.info("OpenAI initialized as LLM backend")
+                return
+            except Exception as e:
+                logger.warning(f"Could not initialize OpenAI: {e}")
+                self.openai_client = None
+        
+        # No LLM available
+        self.llm_type = None
+        logger.warning("No LLM backend available (neither Ollama nor OpenAI)")
     
     def add_documents(self, documents: List[Dict]) -> int:
         """
@@ -190,8 +232,8 @@ class LegalRAG:
         if not self._initialized:
             self.initialize()
         
-        if not self.llm_client:
-            return "LLM client not available"
+        if not self.llm_type:
+            return "LLM client not available (neither Ollama nor OpenAI configured)"
         
         # Build context from documents
         context = "\n\n".join([
@@ -217,18 +259,37 @@ SAVOL: {query}
 JAVOB:"""
         
         try:
-            response = self.llm_client.chat(
-                model=self.llm_model,
-                messages=[
-                    {"role": "system", "content": system_prompt},
-                    {"role": "user", "content": full_prompt}
-                ],
-                options={
-                    "temperature": 0.1,
-                    "num_predict": 1024,
-                }
-            )
-            return response['message']['content']
+            if self.llm_type == 'ollama':
+                # Use Ollama
+                response = self.llm_client.chat(
+                    model=self.llm_model,
+                    messages=[
+                        {"role": "system", "content": system_prompt},
+                        {"role": "user", "content": full_prompt}
+                    ],
+                    options={
+                        "temperature": 0.1,
+                        "num_predict": 1024,
+                    }
+                )
+                return response['message']['content']
+            
+            elif self.llm_type == 'openai':
+                # Use OpenAI
+                response = self.openai_client.chat.completions.create(
+                    model=self.openai_model,
+                    messages=[
+                        {"role": "system", "content": system_prompt},
+                        {"role": "user", "content": full_prompt}
+                    ],
+                    temperature=0.1,
+                    max_tokens=1024,
+                )
+                return response.choices[0].message.content
+            
+            else:
+                return "LLM backend not configured"
+                
         except Exception as e:
             logger.error(f"LLM generation failed: {e}")
             return f"Xatolik: {str(e)}"

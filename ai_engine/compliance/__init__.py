@@ -64,6 +64,8 @@ class IssueType(Enum):
     FORMAT = "format"
     SPELLING = "spelling"
     GRAMMAR = "grammar"
+    STRUCTURAL = "structural"  # Document structure issues
+    INVALID_DOCUMENT = "invalid_document"  # Not a valid contract
     OTHER = "other"
 
 
