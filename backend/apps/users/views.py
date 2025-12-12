@@ -37,6 +37,7 @@ class RegisterView(generics.CreateAPIView):
     """User registration endpoint."""
     queryset = User.objects.all()
     permission_classes = [AllowAny]
+    authentication_classes = []  # No authentication required for registration
     serializer_class = UserCreateSerializer
 
 
@@ -77,6 +78,7 @@ class ChangePasswordView(generics.UpdateAPIView):
 class PasswordResetRequestView(generics.GenericAPIView):
     """Request password reset - sends email with token."""
     permission_classes = [AllowAny]
+    authentication_classes = []  # No authentication required
     serializer_class = PasswordResetRequestSerializer
     
     def post(self, request):
@@ -139,6 +141,7 @@ Legal Bridge AI jamoasi
 class PasswordResetConfirmView(generics.GenericAPIView):
     """Confirm password reset with token."""
     permission_classes = [AllowAny]
+    authentication_classes = []  # No authentication required
     serializer_class = PasswordResetConfirmSerializer
     
     def post(self, request):
