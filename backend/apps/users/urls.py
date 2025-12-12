@@ -13,6 +13,8 @@ from .views import (
     ChangePasswordView,
     UserViewSet,
     UserActivityViewSet,
+    PasswordResetRequestView,
+    PasswordResetConfirmView,
 )
 
 router = DefaultRouter()
@@ -24,6 +26,10 @@ urlpatterns = [
     path('login/', CustomTokenObtainPairView.as_view(), name='token_obtain_pair'),
     path('refresh/', TokenRefreshView.as_view(), name='token_refresh'),
     path('register/', RegisterView.as_view(), name='register'),
+    
+    # Password reset
+    path('password-reset/', PasswordResetRequestView.as_view(), name='password_reset_request'),
+    path('password-reset/confirm/', PasswordResetConfirmView.as_view(), name='password_reset_confirm'),
     
     # Profile
     path('profile/', ProfileView.as_view(), name='profile'),

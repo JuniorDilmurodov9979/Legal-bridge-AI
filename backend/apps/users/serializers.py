@@ -118,6 +118,31 @@ class ChangePasswordSerializer(serializers.Serializer):
         return value
 
 
+class PasswordResetRequestSerializer(serializers.Serializer):
+    """Serializer for password reset request."""
+    email = serializers.EmailField(required=True)
+    
+    def validate_email(self, value):
+        if not User.objects.filter(email=value).exists():
+            # Don't reveal if email exists or not for security
+            pass
+        return value
+
+
+class PasswordResetConfirmSerializer(serializers.Serializer):
+    """Serializer for password reset confirmation."""
+    token = serializers.CharField(required=True)
+    new_password = serializers.CharField(required=True, validators=[validate_password])
+    new_password_confirm = serializers.CharField(required=True)
+    
+    def validate(self, attrs):
+        if attrs['new_password'] != attrs['new_password_confirm']:
+            raise serializers.ValidationError({
+                'new_password_confirm': 'Parollar mos kelmadi'
+            })
+        return attrs
+
+
 class UserActivitySerializer(serializers.ModelSerializer):
     """Serializer for user activity logs."""
     

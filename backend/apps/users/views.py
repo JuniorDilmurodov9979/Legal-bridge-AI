@@ -16,8 +16,14 @@ from .serializers import (
     UserUpdateSerializer,
     ChangePasswordSerializer,
     UserActivitySerializer,
+    PasswordResetRequestSerializer,
+    PasswordResetConfirmSerializer,
 )
 from .models import UserActivity
+import secrets
+from django.core.cache import cache
+from django.core.mail import send_mail
+from django.conf import settings as django_settings
 
 User = get_user_model()
 
@@ -66,6 +72,107 @@ class ChangePasswordView(generics.UpdateAPIView):
         return Response({
             'message': 'Parol muvaffaqiyatli o\'zgartirildi'
         })
+
+
+class PasswordResetRequestView(generics.GenericAPIView):
+    """Request password reset - sends email with token."""
+    permission_classes = [AllowAny]
+    serializer_class = PasswordResetRequestSerializer
+    
+    def post(self, request):
+        serializer = self.get_serializer(data=request.data)
+        serializer.is_valid(raise_exception=True)
+        
+        email = serializer.validated_data['email']
+        frontend_url = request.data.get('frontend_url', 'http://localhost:3000')
+        
+        try:
+            user = User.objects.get(email=email)
+            # Generate reset token
+            token = secrets.token_urlsafe(32)
+            # Store token in cache for 1 hour
+            cache.set(f'password_reset_{token}', user.id, timeout=3600)
+            
+            # Build reset link
+            reset_link = f"{frontend_url}/reset-password?token={token}"
+            
+            # Send email
+            try:
+                send_mail(
+                    subject='Legal Bridge AI - Parolni tiklash',
+                    message=f'''Assalomu alaykum, {user.first_name}!
+
+Siz Legal Bridge AI tizimida parolni tiklashni so'radingiz.
+
+Parolni tiklash uchun quyidagi havolaga o'ting:
+{reset_link}
+
+Bu havola 1 soat davomida amal qiladi.
+
+Agar siz bu so'rovni yubormagan bo'lsangiz, bu xabarni e'tiborsiz qoldiring.
+
+Hurmat bilan,
+Legal Bridge AI jamoasi
+''',
+                    from_email=django_settings.DEFAULT_FROM_EMAIL,
+                    recipient_list=[email],
+                    fail_silently=False,
+                )
+                return Response({
+                    'message': 'Parolni tiklash uchun ko\'rsatmalar emailingizga yuborildi'
+                })
+            except Exception as e:
+                # If email fails, return token for demo/testing
+                return Response({
+                    'message': 'Email yuborishda xatolik. Demo token:',
+                    'demo_token': token,
+                    'error': str(e)
+                })
+                
+        except User.DoesNotExist:
+            # Return same message for security
+            return Response({
+                'message': 'Agar email mavjud bo\'lsa, parolni tiklash uchun ko\'rsatmalar yuboriladi'
+            })
+
+
+class PasswordResetConfirmView(generics.GenericAPIView):
+    """Confirm password reset with token."""
+    permission_classes = [AllowAny]
+    serializer_class = PasswordResetConfirmSerializer
+    
+    def post(self, request):
+        serializer = self.get_serializer(data=request.data)
+        serializer.is_valid(raise_exception=True)
+        
+        token = serializer.validated_data['token']
+        new_password = serializer.validated_data['new_password']
+        
+        # Get user ID from cache
+        user_id = cache.get(f'password_reset_{token}')
+        
+        if not user_id:
+            return Response(
+                {'error': 'Token yaroqsiz yoki muddati o\'tgan'},
+                status=status.HTTP_400_BAD_REQUEST
+            )
+        
+        try:
+            user = User.objects.get(id=user_id)
+            user.set_password(new_password)
+            user.save()
+            
+            # Delete token from cache
+            cache.delete(f'password_reset_{token}')
+            
+            return Response({
+                'message': 'Parol muvaffaqiyatli yangilandi. Endi tizimga kirishingiz mumkin.'
+            })
+        except User.DoesNotExist:
+            return Response(
+                {'error': 'Foydalanuvchi topilmadi'},
+                status=status.HTTP_400_BAD_REQUEST
+            )
 
 
 class UserViewSet(viewsets.ModelViewSet):
