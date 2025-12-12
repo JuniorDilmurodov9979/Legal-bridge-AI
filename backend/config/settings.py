@@ -96,13 +96,21 @@ DATABASES = {
     }
 }
 
-# Cache
-CACHES = {
-    'default': {
-        'BACKEND': 'django.core.cache.backends.redis.RedisCache',
-        'LOCATION': env('REDIS_URL', default='redis://localhost:6379/0'),
+# Cache - Use LocMemCache for development, Redis for production
+if DEBUG:
+    CACHES = {
+        'default': {
+            'BACKEND': 'django.core.cache.backends.locmem.LocMemCache',
+            'LOCATION': 'unique-snowflake',
+        }
     }
-}
+else:
+    CACHES = {
+        'default': {
+            'BACKEND': 'django.core.cache.backends.redis.RedisCache',
+            'LOCATION': env('REDIS_URL', default='redis://localhost:6379/0'),
+        }
+    }
 
 # Password validation
 AUTH_PASSWORD_VALIDATORS = [
@@ -114,6 +122,17 @@ AUTH_PASSWORD_VALIDATORS = [
 
 # Custom User Model
 AUTH_USER_MODEL = 'users.User'
+
+# Email Settings - try SMTP first, fallback to console in DEBUG mode
+EMAIL_HOST = env('EMAIL_HOST', default='smtp.gmail.com')
+EMAIL_PORT = env.int('EMAIL_PORT', default=587)
+EMAIL_USE_TLS = env.bool('EMAIL_USE_TLS', default=True)
+EMAIL_HOST_USER = env('EMAIL_HOST_USER', default='')
+EMAIL_HOST_PASSWORD = env('EMAIL_HOST_PASSWORD', default='')
+DEFAULT_FROM_EMAIL = env('EMAIL_HOST_USER', default='noreply@legalbridge.uz')
+
+# Use SMTP backend, errors will be caught in views
+EMAIL_BACKEND = 'django.core.mail.backends.smtp.EmailBackend'
 
 # Internationalization
 LANGUAGE_CODE = 'uz'
