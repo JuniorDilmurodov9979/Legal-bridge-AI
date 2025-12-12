@@ -63,7 +63,14 @@ class ContractAnalysisPipeline:
     def rag(self) -> LegalRAG:
         """Lazy initialization of RAG system."""
         if self._rag is None and self.config.use_rag:
-            self._rag = LegalRAG(llm_model=self.config.llm_model)
+            import os
+            # Check if we should use OpenAI (if Ollama is not available)
+            use_openai = bool(os.environ.get('OPENAI_API_KEY'))
+            self._rag = LegalRAG(
+                llm_model=self.config.llm_model,
+                use_openai=use_openai,
+                openai_model="gpt-3.5-turbo"
+            )
             try:
                 self._rag.initialize()
             except Exception as e:
@@ -101,13 +108,91 @@ class ContractAnalysisPipeline:
             # Step 3: Detect contract type
             contract_type = self._detect_contract_type(text, metadata)
             
+            # Check if document is a valid contract
+            is_valid_contract = self._is_valid_contract(text, metadata, contract_type)
+            
             # Update contract metadata
             self._update_contract_metadata(contract, metadata, contract_type)
             
             # Step 4: Create sections in database
             self._save_sections(contract, sections)
             
-            # Step 5: Check compliance
+            # If not a valid contract, only check spelling and return early
+            if not is_valid_contract:
+                logger.warning("Document is not a valid contract, skipping deep analysis")
+                
+                # Only check spelling errors
+                spelling_errors = []
+                issues = []
+                if self.config.analyze_spelling:
+                    logger.info("Checking spelling errors only...")
+                    spelling_errors = self.spelling_checker.check_text(text, metadata.language)
+                    for sp_error in spelling_errors:
+                        issues.append(ComplianceIssue(
+                            issue_type=IssueType.SPELLING,
+                            severity=IssueSeverity.LOW,
+                            title=f"Imloviy xato: {sp_error.word}",
+                            description=sp_error.description,
+                            section_reference=f"{sp_error.line_number}-qator",
+                            clause_reference='',
+                            text_excerpt=sp_error.context,
+                            law_name='',
+                            law_article='',
+                            suggestion=f"To'g'ri yozilishi: {sp_error.suggestion}",
+                            suggested_text=sp_error.suggestion
+                        ))
+                
+                # Add warning about invalid contract
+                issues.append(ComplianceIssue(
+                    issue_type=IssueType.STRUCTURAL,
+                    severity=IssueSeverity.CRITICAL,
+                    title="Hujjat shartnoma emas",
+                    description="Yuklangan hujjat hech qaysi shartnoma turiga to'g'ri kelmaydi. "
+                               "Iltimos, to'g'ri shartnoma hujjatini yuklang.",
+                    section_reference='',
+                    clause_reference='',
+                    text_excerpt=text[:500] if len(text) > 500 else text,
+                    law_name='',
+                    law_article='',
+                    suggestion="Shartnoma hujjati quyidagi elementlarni o'z ichiga olishi kerak: "
+                              "tomonlar, shartnoma predmeti, huquq va majburiyatlar, muddat, narx.",
+                    suggested_text=''
+                ))
+                
+                processing_time = time.time() - start_time
+                
+                return {
+                    'success': True,
+                    'contract_id': str(contract.id),
+                    'contract_type': 'invalid',
+                    'language': metadata.language,
+                    'is_scanned': is_scanned,
+                    'ocr_confidence': ocr_confidence,
+                    'sections_count': len(sections),
+                    'issues': [self._issue_to_dict(i) for i in issues],
+                    'issues_count': len(issues),
+                    'spelling_errors_count': len(spelling_errors),
+                    'overall_score': 0,
+                    'risk_level': 'critical',
+                    'compliance_score': 0,
+                    'completeness_score': 0,
+                    'clarity_score': 0,
+                    'balance_score': 0,
+                    'summary': "⚠️ Yuklangan hujjat shartnoma emas yoki shartnoma formatiga to'g'ri kelmaydi. "
+                              "Chuqur tahlil amalga oshirilmadi. "
+                              f"Aniqlangan imloviy xatolar soni: {len(spelling_errors)}",
+                    'recommendations': [
+                        "To'g'ri shartnoma hujjatini yuklang",
+                        "Shartnoma quyidagi turlardan biri bo'lishi kerak: xizmat ko'rsatish, mol yetkazib berish, pudrat, mehnat, ijara, davlat xaridi, qarz",
+                        "Shartnomada tomonlar, muddat, narx va boshqa majburiy elementlar bo'lishi kerak"
+                    ],
+                    'enhanced_analysis': {},
+                    'processing_time': processing_time,
+                    'model_used': self.config.llm_model,
+                    'is_valid_contract': False
+                }
+            
+            # Step 5: Check compliance (only for valid contracts)
             issues = []
             if self.config.analyze_compliance:
                 logger.info("Checking legal compliance...")
@@ -178,6 +263,7 @@ class ContractAnalysisPipeline:
                 'enhanced_analysis': enhanced_analysis,
                 'processing_time': processing_time,
                 'model_used': self.config.llm_model,
+                'is_valid_contract': True,
             }
             
             logger.info(f"Analysis completed in {processing_time:.2f}s")
@@ -244,6 +330,49 @@ class ContractAnalysisPipeline:
             return best_type[0]
         
         return 'other'
+    
+    def _is_valid_contract(self, text: str, metadata: ContractMetadata, contract_type: str) -> bool:
+        """
+        Check if the document is a valid contract.
+        Returns False if document doesn't match any contract type.
+        """
+        text_lower = text.lower()
+        
+        # If contract type is 'other', check for basic contract elements
+        if contract_type == 'other':
+            # Check for basic contract keywords
+            contract_keywords = [
+                'shartnoma', 'договор', 'kelishuv', 'соглашение',
+                'bitim', 'контракт', 'kontrakt'
+            ]
+            
+            has_contract_keyword = any(kw in text_lower for kw in contract_keywords)
+            
+            # Check for party indicators
+            party_keywords = [
+                'buyurtmachi', 'заказчик', 'pudratchi', 'подрядчик',
+                'ijara beruvchi', 'арендодатель', 'ijara oluvchi', 'арендатор',
+                'sotuvchi', 'продавец', 'xaridor', 'покупатель',
+                'ish beruvchi', 'работодатель', 'xodim', 'работник',
+                'tomon', 'сторона', '1-tomon', '2-tomon'
+            ]
+            
+            has_parties = any(kw in text_lower for kw in party_keywords)
+            
+            # Check for legal elements
+            legal_keywords = [
+                'muddat', 'срок', 'narx', 'цена', 'summa', 'сумма',
+                'majburiyat', 'обязательство', 'huquq', 'право',
+                'javobgarlik', 'ответственность', 'imzo', 'подпись'
+            ]
+            
+            has_legal_elements = sum(1 for kw in legal_keywords if kw in text_lower) >= 2
+            
+            # Document is valid contract if it has contract keyword AND (parties OR legal elements)
+            return has_contract_keyword and (has_parties or has_legal_elements)
+        
+        # If contract type is detected, it's valid
+        return True
     
     def _update_contract_metadata(self, contract, metadata: ContractMetadata, contract_type: str):
         """Update contract with extracted metadata."""
