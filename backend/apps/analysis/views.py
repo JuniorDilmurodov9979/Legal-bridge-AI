@@ -300,17 +300,18 @@ def check_spelling(request):
                 status=status.HTTP_400_BAD_REQUEST
             )
         
+
         error_list = []
-        
+
         # Try AI-based checking first
         if use_ai:
             try:
                 import ollama
                 import json
                 import re
-                
+
                 client = ollama.Client(host='http://localhost:11434')
-                
+
                 prompt = f"""Sen o'zbek tili imlo tekshiruvchisi mutaxassisissan. Quyidagi matnni tekshir va FAQAT xatolarni top.
 
 Matn: "{text}"
@@ -333,21 +334,21 @@ FAQAT JSON formatda javob ber, boshqa hech narsa yozma."""
                     model='llama3.1',
                     messages=[{'role': 'user', 'content': prompt}]
                 )
-                
+
                 ai_response = response['message']['content'].strip()
-                
+
                 # Parse JSON from response
                 json_match = re.search(r'\[.*\]', ai_response, re.DOTALL)
                 if json_match:
                     try:
                         ai_errors = json.loads(json_match.group())
-                        
+
                         for i, err in enumerate(ai_errors):
                             if isinstance(err, dict) and 'word' in err and 'suggestion' in err:
                                 # Find position of word in text
                                 word = err.get('word', '')
                                 pos = text.lower().find(word.lower())
-                                
+
                                 error_list.append({
                                     'word': word,
                                     'suggestion': err.get('suggestion', ''),
@@ -360,20 +361,19 @@ FAQAT JSON formatda javob ber, boshqa hech narsa yozma."""
                                 })
                     except json.JSONDecodeError:
                         pass
-                        
+
             except Exception as e:
                 # If AI fails, fall back to dictionary-based checking
                 print(f"AI spelling check failed: {e}, falling back to dictionary")
                 use_ai = False
-        
-        # Fallback to dictionary-based checking if AI didn't work or not requested
-        if not use_ai or not error_list:
-            from ai_engine.spelling import SpellingChecker
-            
-            checker = SpellingChecker()
-            errors = checker.check_text(text, language)
-            
-            for error in errors:
+
+        # Always run fallback (dictionary-based) checking and add its errors
+        from ai_engine.spelling import SpellingChecker
+        checker = SpellingChecker()
+        errors = checker.check_text(text, language)
+        for error in errors:
+            # Avoid duplicates: only add if not already in error_list
+            if not any(error.word == e.get('word') and error.suggestion == e.get('suggestion') for e in error_list):
                 error_list.append({
                     'word': error.word,
                     'suggestion': error.suggestion,
@@ -384,13 +384,13 @@ FAQAT JSON formatda javob ber, boshqa hech narsa yozma."""
                     'language': error.language,
                     'description': error.description,
                 })
-        
+
         return Response({
             'errors': error_list,
             'total_errors': len(error_list),
             'language_detected': language if language != 'auto' else 'uz_latin',
             'text_length': len(text),
-            'method': 'ai' if use_ai and error_list else 'dictionary'
+            'method': 'ai+dictionary' if use_ai else 'dictionary'
         })
         
     except Exception as e:
