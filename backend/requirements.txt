@@ -4,6 +4,7 @@ billiard==4.2.4
 celery==5.6.0
 redis==5.0.1
 sentence-transformers==2.7.0
+huggingface-hub==0.23.0
 numpy==1.26.4
 charset-normalizer==3.4.4
 click==8.3.1
