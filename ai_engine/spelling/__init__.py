@@ -568,8 +568,8 @@ class SpellingChecker:
                         ))
                         error_found = True
                 
-                # 3. Check for backtick (`) instead of apostrophe (')
-                if not error_found and '`' in word:
+                # 3. Check for backtick (`) instead of apostrophe (') in the middle of a word
+                if not error_found and self._has_internal_backtick(word):
                     suggestion = word.replace('`', "'")
                     errors.append(SpellingError(
                         word=word,
@@ -721,12 +721,20 @@ class SpellingChecker:
                 result = result.replace(lat, cyr)
         
         return result
+
+    def _has_internal_backtick(self, word: str) -> bool:
+        """Return True if the word contains a backtick between letters."""
+        for idx, char in enumerate(word):
+            if char == '`' and 0 < idx < len(word) - 1:
+                if word[idx - 1].isalpha() and word[idx + 1].isalpha():
+                    return True
+        return False
     
     def _check_apostrophe(self, word: str, line_num: int, position: int,
                          line: str, word_pos: int) -> Optional[SpellingError]:
         """Check for incorrect apostrophe usage in Uzbek."""
         # Check for backtick instead of apostrophe
-        if '`' in word:
+        if self._has_internal_backtick(word):
             suggestion = word.replace('`', "'")
             return SpellingError(
                 word=word,
