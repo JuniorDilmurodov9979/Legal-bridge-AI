@@ -157,7 +157,8 @@ export default function ContractDetailPage() {
   // console.log(displayAnalysis?.status);
   // console.log("uiStatus", uiStatus);
   // console.log("displayAnalysis", displayAnalysis);
-  // console.log(displayContract);
+  console.log(displayAnalysis);
+  console.log(uiStatus);
 
   return (
     <div className="space-y-6">
@@ -553,9 +554,7 @@ export default function ContractDetailPage() {
                         </h4>
                         <div className="max-h-48 overflow-y-auto">
                           <pre className="text-xs text-gray-600 whitespace-pre-wrap font-sans">
-                            {displayContract.extracted_text.substring(0, 1000)}
-                            {displayContract.extracted_text.length > 1000 &&
-                              "..."}
+                            {displayContract.extracted_text}
                           </pre>
                         </div>
                         <p className="mt-3 text-xs text-green-500">
@@ -564,14 +563,6 @@ export default function ContractDetailPage() {
                         </p>
                       </div>
                     )}
-                    {/* {showMatnUz
-                    ? null &&
-                      !displayContract.extracted_text && (
-                        <p className="text-sm text-gray-500">
-                          Shartnoma matni mavjud emas.
-                        </p>
-                      )
-                    : null} */}
                   </div>
                 </div>
               )}
@@ -597,7 +588,7 @@ export default function ContractDetailPage() {
         {/* Right Column - Risk Score & Sections */}
         <div className="space-y-6">
           {/* Risk Score */}
-          {uiStatus === "analyzed" && displayAnalysis && (
+          {uiStatus === "completed" && displayAnalysis && (
             <div className="card p-6">
               <h3 className="text-lg font-medium text-gray-900 mb-4 text-center">
                 Risk Bahosi
@@ -628,7 +619,7 @@ export default function ContractDetailPage() {
           )}
 
           {/* Issue Summary */}
-          {uiStatus === "analyzed" && displayAnalysis?.issues && (
+          {uiStatus === "completed" && displayAnalysis?.issues && (
             <div className="card p-6">
               <h3 className="text-lg font-medium text-gray-900 mb-4">
                 Muammolar xulosasi
@@ -707,7 +698,7 @@ export default function ContractDetailPage() {
           )}
 
           {/* Sections Analysis */}
-          {uiStatus === "analyzed" && displayAnalysis?.sections && (
+          {uiStatus === "completed" && displayAnalysis?.sections && (
             <div className="card p-6">
               <h3 className="text-lg font-medium text-gray-900 mb-4">
                 Bo'limlar tahlili
