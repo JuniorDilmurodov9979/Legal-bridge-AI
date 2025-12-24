@@ -38,10 +38,46 @@ SECTION_NAMES_UZ = {
     "other": "Boshqa",
 }
 
+# Russian section names
+SECTION_NAMES_RU = {
+    "parties": "Стороны",
+    "subject": "Предмет договора",
+    "price": "Цена и порядок расчетов",
+    "term": "Срок действия договора",
+    "liability": "Ответственность сторон",
+    "requisites": "Юридические адреса и реквизиты сторон",
+    "delivery": "Сроки и порядок поставки продукции",
+    "quality": "Качество и количество продукции",
+    "warranty": "Гарантия",
+    "force_majeure": "Форс-мажор",
+    "dispute": "Разрешение споров",
+    "termination": "Расторжение договора",
+    "rights": "Права сторон",
+    "obligations": "Обязанности сторон",
+    "signatures": "Подписи",
+    "confidentiality": "Конфиденциальность",
+    "amendments": "Изменения",
+    "acceptance": "Порядок приёма-передачи",
+    "payment": "Порядок оплаты",
+    "other": "Прочие условия",
+}
+
 
 def get_section_name_uz(section_value: str) -> str:
     """Get Uzbek name for section type."""
     return SECTION_NAMES_UZ.get(section_value, section_value)
+
+
+def get_section_name_ru(section_value: str) -> str:
+    """Get Russian name for section type."""
+    return SECTION_NAMES_RU.get(section_value, section_value)
+
+
+def get_section_name(section_value: str, language: str = 'uz-latn') -> str:
+    """Get localized section name based on language."""
+    if language == 'ru':
+        return get_section_name_ru(section_value)
+    return get_section_name_uz(section_value)
 
 
 class IssueSeverity(Enum):
