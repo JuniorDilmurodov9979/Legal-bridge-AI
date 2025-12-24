@@ -283,6 +283,8 @@ class ContractAnalysisPipeline:
                 'completeness_score': risk_score.completeness_score if risk_score else 50,
                 'clarity_score': risk_score.clarity_score if risk_score else 50,
                 'balance_score': risk_score.balance_score if risk_score else 50,
+                    'ambiguity_score': getattr(risk_score, 'ambiguity_score', 50) if risk_score else 50,
+                    'specificity_score': getattr(risk_score, 'specificity_score', 50) if risk_score else 50,
                 'summary': summary,
                 'recommendations': risk_score.recommendations if risk_score else [],
                 'enhanced_analysis': enhanced_analysis,

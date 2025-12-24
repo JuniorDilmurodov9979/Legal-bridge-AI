@@ -233,12 +233,50 @@ def test_without_llm():
     print(f"Risk Level: {risk_score.risk_level.value}")
     print(f"Enhanced by LLM: {risk_score.enhanced_by_llm}")
 
+    # Verify new content evaluation metrics exist
+    print(f"Ambiguity Score: {getattr(risk_score, 'ambiguity_score', 'n/a')}/100")
+    print(f"Specificity Score: {getattr(risk_score, 'specificity_score', 'n/a')}/100")
+
+
+def test_content_evaluation_scores():
+    """Verify ambiguity reduces score and specificity rewards concrete details."""
+    print("\n" + "="*80)
+    print("TEST: CONTENT EVALUATION (AMBIGUITY & SPECIFICITY)")
+    print("="*80)
+
+    sections = [
+        Section(
+            number=1,
+            title="Narx va to'lov",
+            content="To'lov taxminan 1 000 000 so'm bo'ladi va/yoki keyinchalik aniqlanadi.",
+            section_type=SectionType.PRICE,
+            clauses=[], start_pos=0, end_pos=120
+        ),
+        Section(
+            number=2,
+            title="Muddat",
+            content="Ishlar 01/02/2025 dan 15/03/2025 gacha 10% bonus bilan yakunlanadi (8 soat/kun).",
+            section_type=SectionType.TERM,
+            clauses=[], start_pos=120, end_pos=260
+        ),
+    ]
+
+    metadata = ContractMetadata(contract_number="TEST-004", contract_date="2025-01-01", language="uz")
+    risk_engine = RiskScoringEngine()
+    score = risk_engine.calculate_score(sections, metadata, [], "service")
+
+    print(f"Ambiguity Score: {score.ambiguity_score}/100")
+    print(f"Specificity Score: {score.specificity_score}/100")
+    assert score.ambiguity_score < 100, "Ambiguity should reduce the score"
+    assert score.specificity_score >= 50, "Specificity should be rewarded"
+
 
 if __name__ == "__main__":
     try:
         test_risky_clause_detection()
         test_risk_scoring_with_llm_data()
         test_without_llm()
+        test_content_evaluation_scores()
         
         print("\n" + "="*80)
         print("✅ BARCHA TESTLAR MUVAFFAQIYATLI BAJARILDI!")

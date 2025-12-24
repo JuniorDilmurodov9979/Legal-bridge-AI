@@ -119,6 +119,8 @@ class ContractParser:
             r"(?i)(?:^|\n)\s*(?:(?:[\dIVX]+|[A-ZА-ЯЁЎҚҲҒ]{1,3})[\.\)]\s*)?(?:TOPSHIRISH\s+TARTIBI|ПОРЯДОК\s+СДАЧИ)",
             r"(?i)(?:^|\n)\s*(?:(?:[\dIVX]+|[A-ZА-ЯЁЎҚҲҒ]{1,3})[\.\)]\s*)?(?:ЕТКАЗИБ\s+БЕРИШ|ТОПШИРИШ\s+ТАРТИБИ)",
             r"(?i)(?:^|\n)\s*(?:(?:[\dIVX]+|[A-ZА-ЯЁЎҚҲҒ]{1,3})[\.\)]\s*)?(?:СРОКИ\s+И\s+ПОРЯДОК\s+ПОСТАВК\w*)",
+            r"(?i)(?:^|\n)\s*(?:(?:[\dIVX]+|[A-ZА-ЯЁЎҚҲҒ]{1,3})[\.\)]\s*)?(?:ПОРЯДОК\s+ПРИ[ЁЕ]М\w*\s*ПЕРЕДАЧ\w*\s*ТОВАР\w*)",
+            r"(?i)(?:^|\n)\s*(?:(?:[\dIVX]+|[A-ZА-ЯЁЎҚҲҒ]{1,3})[\.\)]\s*)?(?:ПРИ[ЁЕ]МКА\s*И\s*ПЕРЕДАЧ\w*)",
         ],
         SectionType.QUALITY: [
             r"(?i)(?:^|\n)\s*(?:(?:[\dIVX]+|[A-ZА-ЯЁЎҚҲҒ]{1,3})[\.\)]\s*)?(?:SIFAT\s+TALABLARI|ТРЕБОВАНИЯ\s+К\s+КАЧЕСТВУ|Sifat)",
@@ -133,6 +135,7 @@ class ContractParser:
             r"(?i)(?:^|\n)\s*(?:(?:[\dIVX]+|[A-ZА-ЯЁЎҚҲҒ]{1,3})[\.\)]\s*)?(?:JAVOBGARLIK|ОТВЕТСТВЕННОСТЬ)",
             r"(?i)(?:^|\n)\s*(?:(?:[\dIVX]+|[A-ZА-ЯЁЎҚҲҒ]{1,3})[\.\)]\s*)?(?:MODDIY\s+JAVOBGARLIK|МАТЕРИАЛЬНАЯ\s+ОТВЕТСТВЕННОСТЬ)",
             r"(?i)(?:^|\n)\s*(?:(?:[\dIVX]+|[A-ZА-ЯЁЎҚҲҒ]{1,3})[\.\)]\s*)?(?:ЖАВОБГАРЛИК)",
+            r"(?i)(?:^|\n)\s*(?:(?:[\dIVX]+|[A-ZА-ЯЁЎҚҲҒ]{1,3})[\.\)]\s*)?(?:ОТВЕТСТВЕННОСТЬ\s+СТОРОН)",
         ],
         SectionType.FORCE_MAJEURE: [
             r"(?i)(?:^|\n)\s*(?:(?:[\dIVX]+|[A-ZА-ЯЁЎҚҲҒ]{1,3})[\.\)]\s*)?(?:FORS-MAJOR|ФОРС-МАЖОР|Favqulodda\s+holatlar)",
@@ -167,6 +170,8 @@ class ContractParser:
             r"(?i)(?:^|\n)\s*(?:(?:[\dIVX]+|[A-ZА-ЯЁЎҚҲҒ]{1,3})[\.\)]\s*)?(?:YURIDIK\s+MANZILLAR|ЮРИДИЧЕСКИЕ\s+АДРЕСА)",
             r"(?i)(?:^|\n)\s*(?:(?:[\dIVX]+|[A-ZА-ЯЁЎҚҲҒ]{1,3})[\.\)]\s*)?(?:ТОМОНЛАРНИНГ\s+РЕКВИЗИТЛАРИ|ЮРИДИК\s+МАНЗИЛЛАР)",
             r"(?i)(?:^|\n)\s*(?:(?:[\dIVX]+|[A-ZА-ЯЁЎҚҲҒ]{1,3})[\.\)]\s*)?(?:REKVIZIT|РЕКВИЗИТ)",
+            r"(?i)(?:^|\n)\s*(?:(?:[\dIVX]+|[A-ZА-ЯЁЎҚҲҒ]{1,3})[\.\)]\s*)?(?:ЮРИДИЧЕСКИЕ\s+АДРЕСА\s+И\s+РЕКВИЗИТЫ\s+СТОРОН)",
+            r"(?i)(?:^|\n)\s*(?:Исполнитель|Заказчик)\s*[:–—]",
         ],
         SectionType.SIGNATURES: [
             r"(?i)(?:^|\n)\s*(?:IMZOLAR|ПОДПИСИ\s+СТОРОН)",
@@ -553,6 +558,11 @@ class ContractParser:
         """Detect contract language: Russian, Uzbek Cyrillic, or Latin."""
         import logging
         logger = logging.getLogger(__name__)
+        
+        # Priority check: look for "Договор" in first 2000 chars (strong Russian marker)
+        if re.search(r'(?i)\bДоговор\b', text[:2000]):
+            logger.info("[LANG_DETECT] RETURNING: ru (found 'Договор' keyword)")
+            return 'ru'
         
         cyrillic = set('абвгдеёжзийклмнопрстуфхцчшщъыьэюяАБВГДЕЁЖЗИЙКЛМНОПРСТУФХЦЧШЩЪЫЬЭЮЯ')
         russian_specific = set('ъыэё')

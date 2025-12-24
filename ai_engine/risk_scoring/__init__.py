@@ -30,6 +30,8 @@ class RiskScore:
     completeness_score: int
     clarity_score: int
     balance_score: int
+    ambiguity_score: int
+    specificity_score: int
     breakdown: Dict[str, int]
     recommendations: List[str]
     risky_clauses: List[Dict] = field(default_factory=list)  # Xavfli bandlar
@@ -131,13 +133,17 @@ class RiskScoringEngine:
         completeness_score = self._calculate_completeness_score(sections, contract_type)
         clarity_score = self._calculate_clarity_score(sections, metadata)
         balance_score = self._calculate_balance_score(issues, clause_analyses)
+        ambiguity_score = self._calculate_ambiguity_score(sections)
+        specificity_score = self._calculate_specificity_score(sections)
         
         # Calculate overall score (weighted average)
         overall_score = self._calculate_overall_score(
             compliance_score,
             completeness_score,
             clarity_score,
-            balance_score
+            balance_score,
+            ambiguity_score,
+            specificity_score,
         )
         
         # Determine risk level
@@ -159,6 +165,8 @@ class RiskScoringEngine:
             completeness_score=completeness_score,
             clarity_score=clarity_score,
             balance_score=balance_score,
+            ambiguity_score=ambiguity_score,
+            specificity_score=specificity_score,
             breakdown=breakdown,
             recommendations=recommendations,
             risky_clauses=risky_clauses,
@@ -331,25 +339,68 @@ class RiskScoringEngine:
         compliance_score: int,
         completeness_score: int,
         clarity_score: int,
-        balance_score: int
+        balance_score: int,
+        ambiguity_score: int,
+        specificity_score: int,
     ) -> int:
         """Calculate weighted overall score."""
         # Weights for each component
         weights = {
-            'compliance': 0.40,
-            'completeness': 0.25,
-            'clarity': 0.20,
+            'compliance': 0.35,
+            'completeness': 0.20,
+            'clarity': 0.15,
             'balance': 0.15,
+            'ambiguity': 0.07,
+            'specificity': 0.08,
         }
         
         overall = (
             compliance_score * weights['compliance'] +
             completeness_score * weights['completeness'] +
             clarity_score * weights['clarity'] +
-            balance_score * weights['balance']
+            balance_score * weights['balance'] +
+            ambiguity_score * weights['ambiguity'] +
+            specificity_score * weights['specificity']
         )
         
         return int(overall)
+
+    def _calculate_ambiguity_score(self, sections: List[Section]) -> int:
+        """Penalize vague/ambiguous language across sections."""
+        score = 100
+        vague_patterns = [
+            "and/or", "va/yoki", "reasonable", "mantiqan", "as needed",
+            "zarur bo'lganda", "har qanday", "istalgan", "примерно",
+            "taxminan", "как будет", "as required", "по мере необходимости",
+            "va hokazo", "va boshqalar", "и т.д.", "и прочее",
+        ]
+        for section in sections:
+            text = section.content.lower()
+            for pat in vague_patterns:
+                if pat in text:
+                    score -= 2
+            # Penalize excessive use of generic pronouns or modal verbs
+            score -= min(text.count(" mumkin "), 3)
+            score -= min(text.count(" kerak "), 2)
+        return max(0, min(100, score))
+
+    def _calculate_specificity_score(self, sections: List[Section]) -> int:
+        """Reward measurable, concrete details: amounts, dates, units."""
+        import re
+        score = 50  # start from middle, reward concreteness
+        patterns = {
+            'amounts': r"\b\d{1,3}(?:[\s\.,]\d{3})+(?:\s*(?:so['']m|сум|UZS|USD|EUR|RUB))?\b",
+            'dates': r"\b\d{1,2}[\./-]\d{1,2}[\./-]\d{2,4}\b",
+            'percents': r"\b\d{1,2}\s*%\b",
+            'units': r"\b(?:kg|кг|m3|м3|soat|час|kun|день|oy|месяц)\b",
+        }
+        for section in sections:
+            text = section.content
+            for name, rx in patterns.items():
+                matches = re.findall(rx, text, flags=re.IGNORECASE)
+                if matches:
+                    score += min(len(matches) * 2, 10)
+        return max(0, min(100, score))
     
     def _determine_risk_level(self, score: int) -> RiskLevel:
         """Determine risk level from score. Adjusted for LLM critical findings."""
