@@ -82,19 +82,12 @@ class LegalRAG:
                 tenant=self.tenant,
             )
 
-            # Ensure default tenant/collection exists to avoid "Could not connect to tenant" errors
+            # Ensure tenant exists (Chroma 0.5+ requires explicit tenant creation for custom names)
             try:
-                self.chroma_client.get_or_create_collection(
-                    name=self.tenant,
-                    metadata={"hnsw:space": "cosine"},
-                )
+                if hasattr(self.chroma_client, "create_tenant"):
+                    self.chroma_client.create_tenant(self.tenant)
             except Exception as e:
-                logger.warning(f"Could not bootstrap tenant {self.tenant}: {e}")
-                # Attempt an explicit create as a fallback (Chroma >=0.5 requires it once)
-                self.chroma_client.create_collection(
-                    name=self.tenant,
-                    metadata={"hnsw:space": "cosine"},
-                )
+                logger.warning(f"Tenant bootstrap skipped/failed (likely already exists): {e}")
 
             # Get or create main collection
             self.collection = self.chroma_client.get_or_create_collection(
