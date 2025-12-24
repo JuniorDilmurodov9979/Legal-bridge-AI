@@ -8,6 +8,7 @@ import logging
 from typing import Dict, List, Optional, Tuple
 from dataclasses import dataclass, field
 from enum import Enum
+from .inn_registry import resolve_inn_name
 
 logger = logging.getLogger(__name__)
 
@@ -234,7 +235,8 @@ class ContractParser:
             # Same label but name on next line
             r"(?im)^\s*(?:1|I)[-\s]*tomon.*?(?:buyurtmachi|Буюртмачи|zakazchik|Заказчик).*?\n\s*([^\n]{3,200})",
             r'“([A-Z][A-Z\s]+?)”\s+МЧЖ\s+номидан.*?буюртмачи',
-            r"(?ims)(?:Заказчик|Покупатель).*?Наименование[:\s]+([^\n]+?)(?=\s*(?:Телефон|Факс|ИНН|ОКЭД|Адрес|$))",
+            # Avoid matching product table headers like "Наименование товара/услуги"
+            r"(?ims)(?:Заказчик|Покупатель).*?Наименование[:\s]+(?!\s*(?:товаров?|услуг[аи]?))([^\n]+?)(?=\s*(?:Телефон|Факс|ИНН|ОКЭД|Адрес|$))",
             # Intro clause definitions: "Буюртмачи" деб юритиладиган "<name>"
             r"(?is)(?:кейинги|keyingi)\s+(?:уринларда|ўринларда|o['’`]?rinlarda)\s*[\"“”']?\s*буюртмачи\s*[\"“”']?\s+деб\s+юритилад(?:и|иг)ган\s*[\"“”']?([^\"”]{3,200})",
             # Line-anchored labels to avoid mid-sentence matches
@@ -248,7 +250,8 @@ class ContractParser:
             # Same label but name on next line
             r"(?im)^\s*(?:2|II)[-\s]*tomon.*?(?:ijrochi|Ижрочи|pudratchi|Пудратчи|podryadchik|Подрядчик|ispolnitel|Исполнитель).*?\n\s*([^\n]{3,200})",
             r'ва\s+“([A-Z][A-Z\s]+?)”\s+МЧЖ\s+номидан.*?(?:етказиб\s+берувчи|ижрочи)',
-            r"(?ims)(?:Исполнитель|Поставщик).*?Наименование[:\s]+([^\n]+?)(?=\s*(?:Телефон|Факс|ИНН|ОКЭД|Адрес|$))",
+            # Avoid matching product table headers like "Наименование товара/услуги"
+            r"(?ims)(?:Исполнитель|Поставщик).*?Наименование[:\s]+(?!\s*(?:товаров?|услуг[аи]?))([^\n]+?)(?=\s*(?:Телефон|Факс|ИНН|ОКЭД|Адрес|$))",
             # Intro clause definitions: "Пудратчи/Ижрочи" деб юритиладиган "<name>"
             r"(?is)(?:кейинги|keyingi)\s+(?:уринларда|ўринларда|o['’`]?rinlarda)\s*[\"“”']?\s*(?:пудратчи|ижрочи|pudratchi|ijrochi)\s*[\"“”']?\s+деб\s+юритилад(?:и|иг)ган\s*[\"“”']?([^\"”]{3,200})",
             # Line-anchored labels to avoid mid-sentence matches
@@ -435,20 +438,39 @@ class ContractParser:
         
         # Heuristic: derive party names near INN lines in requisites/signature blocks when explicit labels are missing
         try:
-            def _find_name_near_inn(full_text: str, inn_numeric: str) -> Optional[str]:
+            def _find_name_near_inn(full_text: str, inn_numeric: str, label_regex: Optional[str] = None) -> Optional[str]:
                 # Build a permissive pattern that matches the INN digits with optional spaces/dashes
                 inn_pat = ''.join([f"{d}[\\s–-]*" for d in inn_numeric])
                 m = re.search(inn_pat, full_text)
                 if not m:
                     return None
                 # Take a window before the INN occurrence to search for organization names
-                start = max(0, m.start() - 1500)
-                end = min(len(full_text), m.end() + 600)
+                start = max(0, m.start() - 3000)
+                end = min(len(full_text), m.end() + 2000)
                 window = full_text[start:end]
                 # Common org type markers (Uz/Ru)
-                org_markers = r"(?:МЧЖ|АЖ|ООО|АО|AJ|МЖ)"
+                org_markers = r"(?:МЧЖ|АЖ|ООО|АО|ЗАО|ОАО|ИП|ЧП|СП|AJ|МЖ)"
                 candidates_before: List[Tuple[int, str]] = []  # (distance, name)
                 candidates_after: List[Tuple[int, str]] = []   # (distance, name)
+                # Label-anchored capture: e.g., Заказчик/Исполнитель → Наименование: <name>
+                if label_regex:
+                    for lm in re.finditer(rf"(?ims)(?:^|\n)\s*(?:{label_regex}).{{0,250}}?Наименование[:\s]+(?!\s*(?:товаров?|услуг[аи]?))([^\n]+)", window):
+                        name = lm.group(1).strip().strip('“”«»')
+                        pos = start + lm.start()
+                        dist = abs(m.start() - pos)
+                        if pos <= m.start():
+                            candidates_before.append((dist, name))
+                        else:
+                            candidates_after.append((dist, name))
+                # Generic capture: any 'Наименование: <name>' in proximity
+                for nm in re.finditer(r"(?im)(?:^|\n)\s*Наименование[:\s]+(?!\s*(?:товаров?|услуг[аи]?))([^\n]+)", window):
+                    name = nm.group(1).strip().strip('“”«»')
+                    pos = start + nm.start()
+                    dist = abs(m.start() - pos)
+                    if pos <= m.start():
+                        candidates_before.append((dist, name))
+                    else:
+                        candidates_after.append((dist, name))
                 # Prefer quoted names followed by org marker: “NAME” МЧЖ / «NAME» АЖ
                 for qm in re.finditer(rf"[“\«]([^”\»\n]{{3,200}})[”\»]\s+{org_markers}", window, re.IGNORECASE):
                     name = qm.group(1).strip()
@@ -469,12 +491,18 @@ class ContractParser:
                     else:
                         candidates_after.append((dist, name))
                 # Prefer the closest preceding candidate; if none, take the closest following
-                if candidates_before:
+                if candidates_before or candidates_after:
                     candidates_before.sort(key=lambda x: x[0])
-                    return candidates_before[0][1]
-                if candidates_after:
                     candidates_after.sort(key=lambda x: x[0])
-                    return candidates_after[0][1]
+                    best_before = candidates_before[0] if candidates_before else (10**9, '')
+                    best_after = candidates_after[0] if candidates_after else (10**9, '')
+                    # If preceding is very far and a following candidate is closer, use following
+                    if best_before[0] > 500 and best_after[0] < best_before[0]:
+                        return best_after[1]
+                    if best_before[1]:
+                        return best_before[1]
+                    if best_after[1]:
+                        return best_after[1]
                 # Another fallback: header-like single line before INN
                 lines = window.split("\n")
                 for idx in range(len(lines)-1, -1, -1):
@@ -490,12 +518,12 @@ class ContractParser:
             # Choose a robust search area: requisites_text if present, else tail of the document
             search_area = requisites_text or text[-8000:]
             if metadata.party_a_inn and not metadata.party_a_name:
-                name_a = _find_name_near_inn(search_area, metadata.party_a_inn)
+                name_a = _find_name_near_inn(search_area, metadata.party_a_inn, label_regex=r"Заказчик|Покупатель|Буюртмачи|Buyurtmachi")
                 if name_a:
                     logger_local.info(f"[PARTY_NEAR_INN] party_a_name inferred: {name_a[:120]}")
                     metadata.party_a_name = name_a
             if metadata.party_b_inn and not metadata.party_b_name:
-                name_b = _find_name_near_inn(search_area, metadata.party_b_inn)
+                name_b = _find_name_near_inn(search_area, metadata.party_b_inn, label_regex=r"Исполнитель|Поставщик|Подрядчик|Ижрочи|Ijrochi|Етказиб\s+берувчи|Etkazib\s+beruvchi")
                 if name_b:
                     logger_local.info(f"[PARTY_NEAR_INN] party_b_name inferred: {name_b[:120]}")
                     metadata.party_b_name = name_b
@@ -515,6 +543,18 @@ class ContractParser:
                     if not metadata.party_b_name and len(ordered) >= 2:
                         metadata.party_b_name = ordered[1]
                         logger_local.info(f"[PARTY_MARKERS] party_b_name from markers: {ordered[1][:120]}")
+
+            # If both names ended up identical but the string contains two organization names,
+            # attempt to split into distinct A/B names
+            try:
+                if metadata.party_a_name and metadata.party_b_name and metadata.party_a_name == metadata.party_b_name:
+                    dual = re.findall(r"[“\«]([^”\»\n]{3,200})[”\»]\s+(МЧЖ|АЖ|ООО|АО|AJ)", metadata.party_a_name)
+                    if len(dual) >= 2:
+                        a_name = dual[0][0].strip(); b_name = dual[1][0].strip()
+                        logger_local.info(f"[PARTY_SPLIT] Detected two org names in combined string → A='{a_name}', B='{b_name}'")
+                        metadata.party_a_name, metadata.party_b_name = a_name, b_name
+            except Exception:
+                pass
         except Exception as e:
             logger_local.info(f"[PARTY_NEAR_INN] Heuristic failed: {e}")
         
@@ -631,6 +671,22 @@ class ContractParser:
         if not metadata.party_b_name:
             metadata.party_b_name = self._extract_party(text, 'party_b_name')
 
+        # Final fallback: if names still missing or identical, try INN registry mapping
+        try:
+            identical = (metadata.party_a_name and metadata.party_b_name and metadata.party_a_name == metadata.party_b_name)
+            if (not metadata.party_a_name) or identical:
+                if metadata.party_a_inn:
+                    resolved = resolve_inn_name(metadata.party_a_inn)
+                    if resolved:
+                        metadata.party_a_name = resolved
+            if (not metadata.party_b_name) or identical:
+                if metadata.party_b_inn:
+                    resolved = resolve_inn_name(metadata.party_b_inn)
+                    if resolved:
+                        metadata.party_b_name = resolved
+        except Exception:
+            pass
+
         return metadata
 
     def _extract_party(self, text: str, field: str) -> Optional[str]:
@@ -679,6 +735,16 @@ class ContractParser:
                     # Stop at common delimiters that usually introduce requisites or amounts
                     value = re.split(r"\b(?:ИНН|INN|STIR|Адрес|Address|Телефон|Факс|ОКЭД|Банк|Р/С|р/с|МФО)\b", value)[0].strip()
                     logger.info(f"[PARTY_EXTRACT] {field} after split: {value[:100]}")
+
+                    # Filter out obvious table header noise often mis-captured as party name
+                    noise_keywords = [
+                        "Штрих-код", "Единицы", "Стоимость", "электронному", "Кол-во", "Цена",
+                        "ставка", "учётом НДС", "с учётом НДС", "товаров", "товара", "услуг", "услуги",
+                        "национальному каталогу", "каталогу", "Laboratoriya"
+                    ]
+                    if any(k.lower() in value.lower() for k in noise_keywords):
+                        logger.info(f"[PARTY_EXTRACT] {field} rejected as noise: {value[:100]}")
+                        continue
                     
                     # Keep a reasonable length to avoid swallowing large tables
                     if len(value) > 200:
