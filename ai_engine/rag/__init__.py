@@ -28,7 +28,8 @@ class LegalRAG:
         llm_model: str = "llama3.1",
         llm_base_url: str = "http://localhost:11434",
         use_openai: bool = False,
-        openai_model: str = "gpt-3.5-turbo"
+        openai_model: str = "gpt-3.5-turbo",
+        collection_name: str = "legal_documents"
     ):
         """
         Initialize RAG system.
@@ -47,6 +48,8 @@ class LegalRAG:
         self.llm_base_url = llm_base_url
         self.use_openai = use_openai
         self.openai_model = openai_model
+        self.collection_name = os.environ.get("CHROMA_COLLECTION", collection_name)
+        self.tenant = os.environ.get("CHROMA_TENANT", "default_tenant")
         
         self.embeddings = None
         self.vectorstore = None
@@ -75,12 +78,20 @@ class LegalRAG:
             
             self.chroma_client = chromadb.PersistentClient(
                 path=str(self.vector_store_path),
-                settings=Settings(anonymized_telemetry=False)
+                settings=Settings(anonymized_telemetry=False),
+                tenant=self.tenant,
             )
-            
-            # Get or create collection
+
+            # Ensure tenant exists (Chroma 0.5+ requires explicit tenant creation for custom names)
+            try:
+                if hasattr(self.chroma_client, "create_tenant"):
+                    self.chroma_client.create_tenant(self.tenant)
+            except Exception as e:
+                logger.warning(f"Tenant bootstrap skipped/failed (likely already exists): {e}")
+
+            # Get or create main collection
             self.collection = self.chroma_client.get_or_create_collection(
-                name="legal_documents",
+                name=self.collection_name,
                 metadata={"hnsw:space": "cosine"}
             )
             
@@ -342,8 +353,27 @@ JAVOB:"""
 
         Returns keys: compliance (str), risks (list[str]), recommendations (list[str]), rewrite (str)
         """
-        # Retrieve relevant laws as context
-        relevant_laws = self.search_laws(clause_text, contract_type)
+        # Retrieve relevant laws as context (best-effort)
+        relevant_laws = []
+        try:
+            relevant_laws = self.search_laws(clause_text, contract_type)
+        except Exception as e:
+            logger.warning(f"search_laws failed, continuing with fallback: {e}")
+
+        # If no LLM backend, return heuristic fallback instead of erroring
+        try:
+            if not self._initialized:
+                self.initialize()
+        except Exception as e:
+            logger.warning(f"RAG initialize failed, continuing with fallback: {e}")
+
+        if not self.llm_type:
+            result = self._heuristic_structured_analysis(clause_text)
+            return {
+                'clause': clause_text,
+                'relevant_laws': relevant_laws,
+                'analysis_structured': result,
+            }
 
         # Strict JSON-only instruction
         system_prompt = (
@@ -377,7 +407,12 @@ JAVOB:"""
             if not self._initialized:
                 self.initialize()
             if not self.llm_type:
-                raise RuntimeError("LLM backend not configured")
+                # Should not happen due to early fallback, but guard anyway
+                return {
+                    'clause': clause_text,
+                    'relevant_laws': relevant_laws,
+                    'analysis_structured': self._heuristic_structured_analysis(clause_text),
+                }
 
             # Build context lines like in generate_response
             context_lines = []
@@ -445,6 +480,58 @@ JAVOB:"""
                 'relevant_laws': relevant_laws,
                 'error': str(e),
             }
+
+    def _heuristic_structured_analysis(self, clause_text: str) -> Dict:
+        """Lightweight, rule-based fallback when no LLM backend is available.
+
+        Heuristics:
+        - Detect prohibited/one-sided patterns
+        - Flag high penalties
+        - Basic compliance signal based on presence of concrete terms
+        """
+        import re
+        text = (clause_text or "").lower()
+
+        risks: List[str] = []
+        recs: List[str] = []
+        rewrite = ""
+
+        # Prohibited/illegal indicators
+        illegal_kws = [
+            "javobgarlikdan ozod", "osvobozhdenie ot otvetstvennosti",
+            "полностью освобождается от ответственности",
+        ]
+        if any(kw in text for kw in illegal_kws):
+            risks.append("Javobgarlikni oldindan cheklash/ozod etish taqiqlangan")
+            recs.append("FK 325-modda talablariga mos ravishda javobgarlik bandini qayta yozing")
+            rewrite = "Tomonlar qonunda nazarda tutilgan hollarda javobgarlikdan ozod bo'lishi mumkin, boshqa hollarda javobgarlik cheklanmaydi."
+
+        # One-sided patterns
+        one_sided = ["bir tomonlama", "односторонний", "faqat buyurtmachi", "только заказчик", "только исполнитель"]
+        if any(kw in text for kw in one_sided):
+            risks.append("Band bir tomonga asossiz ustunlik beradi")
+            recs.append("Huquq va majburiyatlarni ikkala tomon uchun muvozanatli qiling")
+
+        # High penalty detection (e.g., 'пеня 5%')
+        m_penya = re.search(r"penya\s+([0-9]{1,2})%|пеня\s+([0-9]{1,2})%", text)
+        if m_penya:
+            risks.append("Penya miqdori yuqori bo'lishi mumkin")
+            recs.append("FK 327-modda doirasida penya limitlarini ko'rib chiqing")
+
+        # Compliance signal heuristics
+        has_terms = any(kw in text for kw in ["muddat", "срок", "narx", "цена", "to'lov", "оплата", "javobgarlik", "ответственность"])
+        compliance = "mos" if (has_terms and not risks) else ("mos emas" if illegal_kws and any(kw in text for kw in illegal_kws) else "noaniq")
+
+        # Ensure minimal recommendations
+        if not recs:
+            recs.append("Band mazmunini aniq va o'lchab bo'ladigan qilib yozing")
+
+        return {
+            'compliance': compliance,
+            'risks': risks[:6],
+            'recommendations': recs[:6],
+            'rewrite': rewrite,
+        }
     
     def get_law_reference(self, law_name: str, article_number: str) -> Optional[Dict]:
         """

@@ -58,6 +58,15 @@ class OCRProcessor:
             self.ocr_dpi = int(os.environ.get('OCR_DPI', '400'))
         except Exception:
             self.ocr_dpi = 400
+        # Optional cache directory for OCR results
+        self.use_cache = os.environ.get('OCR_CACHE', '1') in ('1', 'true', 'True')
+        self.cache_dir = Path(os.environ.get('OCR_CACHE_DIR', 'media/cache/ocr')).resolve()
+        if self.use_cache:
+            try:
+                self.cache_dir.mkdir(parents=True, exist_ok=True)
+            except Exception:
+                self.use_cache = False
+
         # Optional PaddleOCR fallback
         self.use_paddle = os.environ.get('USE_PADDLE', '0') in ('1', 'true', 'True')
         self._paddle = None
@@ -138,16 +147,46 @@ class OCRProcessor:
             Tuple of (extracted_text, confidence_score, is_scanned)
         """
         file_path = Path(file_path)
+
+        # Cache hit check
+        if self.use_cache:
+            cache_key = self._make_cache_key(file_path)
+            cache_file = self.cache_dir / f"{cache_key}.json"
+            if cache_file.exists():
+                try:
+                    import json
+                    with open(cache_file, 'r', encoding='utf-8') as f:
+                        data = json.load(f)
+                    return data.get('text', ''), float(data.get('confidence', 1.0)), bool(data.get('is_scanned', False))
+                except Exception:
+                    pass
         extension = file_path.suffix.lower()
         
         if extension == '.pdf':
-            return self._process_pdf(file_path)
+            result = self._process_pdf(file_path)
         elif extension in ['.jpg', '.jpeg', '.png', '.tiff', '.bmp', '.gif']:
-            return self._process_image(file_path)
+            result = self._process_image(file_path)
         elif extension in ['.docx', '.doc']:
-            return self._process_word(file_path)
+            result = self._process_word(file_path)
         else:
             raise ValueError(f"Unsupported file format: {extension}")
+
+        # Write cache
+        if self.use_cache:
+            try:
+                cache_key = self._make_cache_key(file_path)
+                cache_file = self.cache_dir / f"{cache_key}.json"
+                import json
+                with open(cache_file, 'w', encoding='utf-8') as f:
+                    json.dump({
+                        'text': result[0],
+                        'confidence': float(result[1]),
+                        'is_scanned': bool(result[2]),
+                    }, f, ensure_ascii=False)
+            except Exception:
+                pass
+
+        return result
     
     def extract_text_from_bytes(self, file_bytes: bytes, file_type: str) -> Tuple[str, float, bool]:
         """
@@ -204,6 +243,16 @@ class OCRProcessor:
             confidence = max(confidence, ocr_conf)
 
         return native_text, confidence, False
+
+    def _make_cache_key(self, file_path: Path) -> str:
+        """Create a cache key from file path, size, and mtime."""
+        try:
+            stat = file_path.stat()
+            base = f"{str(file_path)}::{stat.st_size}::{int(stat.st_mtime)}"
+        except Exception:
+            base = str(file_path)
+        import hashlib
+        return hashlib.sha1(base.encode('utf-8')).hexdigest()
     
     def _process_pdf_bytes(self, file_bytes: bytes) -> Tuple[str, float, bool]:
         """Process PDF from bytes."""

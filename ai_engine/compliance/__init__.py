@@ -4,6 +4,7 @@ Checks contracts against Uzbekistan laws and regulations.
 """
 
 import logging
+import re
 from typing import Dict, List, Optional, Tuple
 from dataclasses import dataclass, field
 from enum import Enum
@@ -37,10 +38,46 @@ SECTION_NAMES_UZ = {
     "other": "Boshqa",
 }
 
+# Russian section names
+SECTION_NAMES_RU = {
+    "parties": "Стороны",
+    "subject": "Предмет договора",
+    "price": "Цена и порядок расчетов",
+    "term": "Срок действия договора",
+    "liability": "Ответственность сторон",
+    "requisites": "Юридические адреса и реквизиты сторон",
+    "delivery": "Сроки и порядок поставки продукции",
+    "quality": "Качество и количество продукции",
+    "warranty": "Гарантия",
+    "force_majeure": "Форс-мажор",
+    "dispute": "Разрешение споров",
+    "termination": "Расторжение договора",
+    "rights": "Права сторон",
+    "obligations": "Обязанности сторон",
+    "signatures": "Подписи",
+    "confidentiality": "Конфиденциальность",
+    "amendments": "Изменения",
+    "acceptance": "Порядок приёма-передачи",
+    "payment": "Порядок оплаты",
+    "other": "Прочие условия",
+}
+
 
 def get_section_name_uz(section_value: str) -> str:
     """Get Uzbek name for section type."""
     return SECTION_NAMES_UZ.get(section_value, section_value)
+
+
+def get_section_name_ru(section_value: str) -> str:
+    """Get Russian name for section type."""
+    return SECTION_NAMES_RU.get(section_value, section_value)
+
+
+def get_section_name(section_value: str, language: str = 'uz-latn') -> str:
+    """Get localized section name based on language."""
+    if language == 'ru':
+        return get_section_name_ru(section_value)
+    return get_section_name_uz(section_value)
 
 
 class IssueSeverity(Enum):
@@ -340,16 +377,85 @@ class LegalComplianceEngine:
         ),
     ]
     
-    def __init__(self, custom_rules: List[LegalRule] = None):
+    def __init__(self, custom_rules: List[LegalRule] = None, template_rules: Dict = None):
         """
         Initialize the compliance engine.
         
         Args:
             custom_rules: Additional custom rules to add
+            template_rules: Template-specific requirements from contract_templates.json
         """
         self.rules = self.LEGAL_RULES.copy()
         if custom_rules:
             self.rules.extend(custom_rules)
+        
+        # Template-specific rules
+        self.template_rules = template_rules or {}
+        self._add_template_rules()
+    
+    def _add_template_rules(self):
+        """Add template-specific rules from contract_templates.json."""
+        # Template tayyorga asoslangan qo'shimcha qoidalar
+        template_specific_rules = {
+            'employment': [
+                LegalRule(
+                    rule_id="EMPL_001",
+                    title="Mehnat sharoitlari majburiy",
+                    description="Mehnat shartnomalarida ish vaqti, dam olish kunlari va mehnat sharoitlari aniq ko'rsatilishi shart",
+                    law_name="O'zbekiston Respublikasi Mehnat kodeksi",
+                    law_article="27-modda",
+                    applies_to=["labor"],
+                    section_type=SectionType.OBLIGATIONS,
+                    severity=IssueSeverity.HIGH,
+                    check_type="mandatory",
+                    keywords=["ish vaqti", "dam olish", "mehnat sharoitlari", "рабочее время", "отпуск"],
+                ),
+                LegalRule(
+                    rule_id="EMPL_002",
+                    title="Ijtimoiy kafolatlar",
+                    description="Xodim ijtimoiy sug'urta va boshqa kafolatlar bilan ta'minlanishi kerak",
+                    law_name="O'zbekiston Respublikasi Mehnat kodeksi",
+                    law_article="72-modda",
+                    applies_to=["labor"],
+                    section_type=SectionType.RIGHTS,
+                    severity=IssueSeverity.HIGH,
+                    check_type="mandatory",
+                    keywords=["ijtimoiy kafolat", "sug'urta", "социальные гарантии"],
+                ),
+            ],
+            'lease': [
+                LegalRule(
+                    rule_id="LEASE_001",
+                    title="Ko'chmas mulk ijara shartnomasi davlat ro'yxatidan o'tishi",
+                    description="Ko'chmas mulkni ijaraga berishning shartnomasi davlat ro'yxatidan o'tkazilishi kerak",
+                    law_name="O'zbekiston Respublikasi Fuqarolik kodeksi",
+                    law_article="576-modda",
+                    applies_to=["lease"],
+                    section_type=None,
+                    severity=IssueSeverity.HIGH,
+                    check_type="mandatory",
+                    keywords=["ro'yxat", "davlat", "регистрация"],
+                ),
+            ],
+            'supply': [
+                LegalRule(
+                    rule_id="SUPPLY_001",
+                    title="Mol sifatining kafolati",
+                    description="Yetkazib berish shartnomalarida mol sifatining kafolati aniq ko'rsatilishi shart",
+                    law_name="O'zbekiston Respublikasi Fuqarolik kodeksi",
+                    law_article="450-modda",
+                    applies_to=["supply"],
+                    section_type=SectionType.WARRANTY,
+                    severity=IssueSeverity.HIGH,
+                    check_type="mandatory",
+                    keywords=["kafolat", "sifat", "gарантия", "качество"],
+                ),
+            ],
+        }
+        
+        # Har bir contract type uchun rules'ni qo'shish
+        for contract_type, rules in template_specific_rules.items():
+            self.rules.extend(rules)
     
     def check_compliance(
         self,
@@ -385,6 +491,9 @@ class LegalComplianceEngine:
         # Check metadata completeness
         issues.extend(self._check_metadata(metadata, contract_type))
         
+        # Check for risky clauses (rekurziv, bir tomonli, cheksiz javobgarlik, va h.k.)
+        issues.extend(self.detect_risky_clauses(sections, contract_type))
+        
         return issues
     
     def _get_applicable_rules(self, contract_type: str) -> List[LegalRule]:
@@ -407,11 +516,35 @@ class LegalComplianceEngine:
         has_requisites_content = any(kw in all_text for kw in ['stir', 'inn', 'банк', 'bank', 'р/с', 'мфо', 'mfo', 'расчетный счет', 'hisob raqam'])
         if has_requisites_content and SectionType.REQUISITES not in found_types:
             found_types.add(SectionType.REQUISITES)
+
+        # Soft fallback: if strong keywords for a section appear in text, don't mark as missing
+        section_fallback_keywords = {
+            SectionType.SUBJECT: ['предмет', 'шартнома предмети', 'мавзу', 'мавзуси'],
+            SectionType.PRICE: ['цена договора', 'цена', 'стоимость работ', 'стоимость', 'оплата', 'порядок расчетов', 'расчетов', 'нарх', "to'lov", 'tulov', 'тўлов', 'сумма', 'узс', 'uzs', 'қиймати', 'қиймати'],
+            SectionType.TERM: ['срок действия', 'срок договора', 'срок выполнения', 'сроки выполнения', 'срок исполнения', 'срок', 'муддат', 'амал қилади', 'амал килади', 'действует', 'действует до', 'to kuni'],
+            SectionType.LIABILITY: ['ответственность сторон', 'материальная ответственность', 'ответственность', 'javobgarlik', 'штраф', 'пеня', 'jarima'],
+            SectionType.DELIVERY: ['поставка', 'доставка', 'yetkazib', 'етказиб'],
+            SectionType.QUALITY: ['качество', 'сифат', 'sifat'],
+            SectionType.WARRANTY: ['гарант', 'kafolat', 'кафолат'],
+            SectionType.DISPUTE: ['спор', 'da’vo', 'nizo', 'низо'],
+        }
         
         logger.info(f"[COMPLIANCE] required={required}, found={found_types}")
         
+        # Treat strong keyword evidence as presence to improve completeness score
         for section_type in required:
             if section_type not in found_types:
+                fallback_kws = section_fallback_keywords.get(section_type, [])
+                if fallback_kws and any(kw in all_text for kw in fallback_kws):
+                    found_types.add(section_type)
+        
+        for section_type in required:
+            if section_type not in found_types:
+                # If still missing and no evidence, then report
+                fallback_kws = section_fallback_keywords.get(section_type, [])
+                if fallback_kws and any(kw in all_text for kw in fallback_kws):
+                    # Already counted as present above; skip
+                    continue
                 section_name_uz = get_section_name_uz(section_type.value)
                 issues.append(ComplianceIssue(
                     issue_type=IssueType.MISSING_CLAUSE,
@@ -450,6 +583,16 @@ class LegalComplianceEngine:
                     return issues  # Term info found in contract text
             
             if not section and rule.check_type == "mandatory":
+                # Soft fallback: if keywords appear anywhere in text, treat as present
+                all_text = ' '.join(s.content.lower() for s in sections)
+                kw_anywhere = any(kw.lower() in all_text for kw in rule.keywords)
+                if kw_anywhere or rule.section_type in {
+                    SectionType.REQUISITES,
+                    SectionType.TERM,
+                    SectionType.PRICE,
+                    SectionType.SUBJECT,
+                }:
+                    return issues
                 issues.append(ComplianceIssue(
                     issue_type=IssueType.MISSING_CLAUSE,
                     severity=rule.severity,
@@ -603,3 +746,72 @@ class LegalComplianceEngine:
     def get_rules_for_contract_type(self, contract_type: str) -> List[LegalRule]:
         """Get all rules applicable to a contract type."""
         return self._get_applicable_rules(contract_type)
+    
+    def detect_risky_clauses(self, sections: List[Section], contract_type: str) -> List[ComplianceIssue]:
+        """
+        Detect potentially risky clauses like recursive conditions,
+        one-sided terms, illegal provisions, etc.
+        
+        UPDATED: More lenient, fewer false positives.
+        """
+        risky_issues = []
+        
+        # Xavfli naqsh-shablonlar (YUMSHATILGAN - faqat haqiqiy xavflar)
+        risky_patterns = {
+            'unlimited_liability': {
+                'patterns': [
+                    r'cheksiz\s+javobgarlik',
+                    r'неограниченная\s+ответственность',
+                    r'javobgarlikdan\s+to\'liq\s+ozod',  # Complete exemption
+                    r'полностью\s+освобождается\s+от\s+ответственности',
+                ],
+                'severity': IssueSeverity.HIGH,  # Lowered from CRITICAL
+                'title': 'Noaniq javobgarlik shartlari',
+                'description': 'Javobgarlik shartlari aniqlanishi tavsiya etiladi',
+            },
+            'illegal_provision': {
+                'patterns': [
+                    r'qonunga\s+qarshi',
+                    r'противозаконн',
+                    r'запрещен',
+                ],
+                'severity': IssueSeverity.CRITICAL,
+                'title': 'Qonunga zid shart',
+                'description': 'Shartnomada qonunga zid shart topildi',
+            },
+            'very_high_penalty': {
+                'patterns': [
+                    r'penya\s+([5-9]|[1-9]\d)%',  # 5% dan yuqori kunlik penya
+                    r'пеня\s+([5-9]|[1-9]\d)%',
+                ],
+                'severity': IssueSeverity.MEDIUM,  # Lowered from HIGH
+                'title': 'Yuqori penya miqdori',
+                'description': 'Penya miqdori yuqori, qonun talablariga mos ekanligini tekshiring',
+            },
+        }
+        
+        # Hammasini qidirish (faqat haqiqatan xavfli narsalar)
+        for section in sections:
+            section_content = section.content.lower()
+            
+            for pattern_category, pattern_info in risky_patterns.items():
+                for pattern in pattern_info['patterns']:
+                    matches = list(re.finditer(pattern, section_content, re.IGNORECASE))
+                    if matches:
+                        # Faqat bitta xatolik har bir pattern category uchun
+                        risky_issues.append(ComplianceIssue(
+                            issue_type=IssueType.INVALID_CLAUSE,
+                            severity=pattern_info['severity'],
+                            title=pattern_info['title'],
+                            description=pattern_info['description'],
+                            section_reference=f"{section.section_type.value}",
+                            clause_reference=section.title,
+                            text_excerpt=section.content[:200],
+                            law_name="O'zbekiston Respublikasi Fuqarolik kodeksi",
+                            law_article="Umumiy talablar",
+                            suggestion=f"Shartnomani yurist bilan ko'rib chiqing",
+                        ))
+                        break  # Har bir pattern category uchun faqat 1 ta xatolik
+        
+        return risky_issues
+
